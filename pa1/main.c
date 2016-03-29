@@ -3,6 +3,32 @@
 #include <stdint.h>
 #include <pcap/pcap.h>
 
+struct rule {
+    /* ip header */
+    uint8_t tos;
+    uint16_t length;
+    uint16_t fragment;
+    uint8_t ttl;
+    uint32_t srcip;
+    uint32_t destip;
+    
+    /* tcp header */
+    uint16_t srcport;
+    uint16_t destport;
+    uint32_t seq;
+    uint32_t ack;
+    uint8_t flag;
+
+    /* tcp payload */
+    char* http_request;
+    char* content;
+};
+
+struct list_elem {
+    struct rule element;
+    struct list_elem *next;
+};
+
 int main(int argc, char **argv)
 {
     int i, opt;
@@ -12,6 +38,7 @@ int main(int argc, char **argv)
     uint8_t *packet;
     struct pcap_pkthdr header;
     FILE *fp;
+    char *rule_token;
 
     while((opt = getopt(argc, argv, "i:r:")) != -1) {
         switch(opt) {
@@ -41,7 +68,15 @@ int main(int argc, char **argv)
         exit(-1);
     }
 
-    
+    if((fp = fopen(rule_file, "r")) == NULL) {
+        fprintf(stderr, "[Error]File open error(file may not exist\n");
+        exit(-1);
+    }
+
+    while((fscanf(fp, "%s", rule_token)) != EOF) {
+        
+    }
+
     while(true) {
         packet = pcap_next(handle, &header);
         
