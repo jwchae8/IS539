@@ -1,8 +1,11 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdint.h>
+#include <stdlib.h>
+#include <unistd.h>
 #include <ctype.h>
 #include <string.h>
+#include <malloc.h>
 #include <pcap/pcap.h>
 
 
@@ -11,6 +14,32 @@
 #define PORT_MIN 0
 
 #define BUFLEN 2048
+
+struct rule {
+    /* ip header */
+    uint8_t tos;
+    uint16_t length;
+    uint16_t fragoffset;
+    uint8_t ttl;
+    uint32_t srcip;
+    uint32_t destip;
+    
+    /* tcp header */
+    uint16_t srcport;
+    uint16_t destport;
+    uint32_t seq;
+    uint32_t ack;
+    uint8_t flags;
+
+    /* tcp payload */
+    unsigned char* http_request;
+    unsigned char* content;
+
+    /* next rule */
+    struct rule *next_rule;
+};
+
+
 
 int is_ip(char* ipstr, uint32_t* ipnum) {
     int i, dot_count = 0;
@@ -116,29 +145,6 @@ void insert_rule(struct rule *head, struct rule *new_rule) {
     iterator->next_rule = new_rule;
 }
 
-struct rule {
-    /* ip header */
-    uint8_t tos;
-    uint16_t length;
-    uint16_t fragoffset;
-    uint8_t ttl;
-    uint32_t srcip;
-    uint32_t destip;
-    
-    /* tcp header */
-    uint16_t srcport;
-    uint16_t destport;
-    uint32_t seq;
-    uint32_t ack;
-    uint8_t flag;
-
-    /* tcp payload */
-    unsigned char* http_request;
-    unsigned char* content;
-
-    /* next rule */
-    struct rule *next_rule;
-};
 
 
 int main(int argc, char **argv)
@@ -162,10 +168,12 @@ int main(int argc, char **argv)
             case 'i':
                 interface = (char*)malloc(strlen(optarg)+1);
                 strcpy(interface, optarg);
+                interface[strlen(optarg)] = 0;
                 break;
             case 'r':
                 rule_file = (char*)malloc(strlen(optarg)+1);
                 strcpy(rule_file, optarg);
+                rule_file[strlen(optarg)] = 0;
                 break;
             default:
                 fprintf(stderr, "Usage: ./%s -i interface_name -r rule_file_name\n", argv[0]);
@@ -175,12 +183,12 @@ int main(int argc, char **argv)
 
     if(interface == NULL || rule_file == NULL) {
         fprintf(stderr, "Usage: ./%s -i interface_name -r rule_file_name\n", argv[0]);
-        exit(-1)
+        exit(-1);
     }
     
     printf("IDS is running on %s and using rules written in %s\n", interface, rule_file);
     
-    if((handle = pcap_open_live(interface, BUFSIZ, 1, 1000, errbuf)) == NULL) {
+    if((handle = pcap_open_live(interface, BUFSIZ, 0, 1000, errbuf)) == NULL) {
         fprintf(stderr, "[Error]Pcap initialization has failed on %s: %s\n", interface, errbuf);
         exit(-1);
     }
@@ -235,10 +243,7 @@ int main(int argc, char **argv)
         }
         pattern_rule_exists = 1;
         pattern_completed = 0;
-        if(rule_token[0] == '(') {
-            rule_token++;
-        }
-        else {
+        if(rule_token[0] != '(') {
             fprintf(stderr, "[Error]Not valid pattern rule - it should be surrounded with ( and ) : given token = %s\n", rule_token);
             continue;
         }
@@ -251,25 +256,8 @@ int main(int argc, char **argv)
                 fprintf(stderr, "[Error]Not valid pattern rule - no semicolon : given token = %s\n", rule_token);
                 break;
             }
-            strncpy(field, rule_token, colon - rule_token);
-            field[colon - rule_token] = 0;
-            lquote = colon + 1;
-            if(lquote[0] != '\"') {
-                fprintf(stderr, "[Error]Not valid pattern rule - value should be surrounded with \"s : given token = %s\n", rule_token);
-                break;
-            }
-            if((rquote = strrchr(rule_token, '\"')) == NULL) {
-                fprintf(stderr, "[Error]Not valid pattern rule - value should be surrounded with \"s : given token = %s\n", rule_token);
-                break;
-            }
-            if(lquote == rqoute) {
-                fprintf(stderr, "[Error]Not valid pattern rule - value should be surrounded with \"s : given token = %s\n", rule_token);
-                break;
-            }
-            if(lquote + 1 == rqoute) {
-                fprintf(stderr, "[Error]Not valid pattern rule - empty value : given token = %s\n", rule_token);
-                break;
-            }
+            strncpy(field, rule_token + (rule_token[0] == '(' ? 1 : 0), colon - rule_token - (rule_token[0] == '(' ? 1 : 0));
+            field[colon - rule_token - (rule_token[0] == '(' ? 1 : 0)] = 0;
             if(!strcmp(field, "tos")) {
                 if(process_8bit(colon+1, &(new_rule->tos)) < 0) {
                 }
@@ -334,11 +322,11 @@ int main(int argc, char **argv)
                     fprintf(stderr, "[Error]Not valid pattern rule - value should be surrounded with \"s : given token = %s\n", rule_token);
                     break;
                 }
-                if(lquote == rqoute) {
+                if(lquote == rquote) {
                     fprintf(stderr, "[Error]Not valid pattern rule - value should be surrounded with \"s : given token = %s\n", rule_token);
                     break;
                 }
-                if(lquote + 1 == rqoute) {
+                if(lquote + 1 == rquote) {
                     fprintf(stderr, "[Error]Not valid pattern rule - empty value : given token = %s\n", rule_token);
                     break;
                 }
