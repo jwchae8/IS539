@@ -13,7 +13,13 @@
 #define PORT_MAX 65535
 #define PORT_MIN 0
 
+#define ETHERNET_SIZE 14
 #define BUFLEN 2048
+
+#define IP_VERSION(X) ((X >> 4) & 0x0f)
+#define IP_HLENGTH(X) (X & 0x0f)
+#define IP_FLAGS(X) ((X >> 5) & 0x07)
+#define IP_FRAGOFFSET(X) (X & 0x1fff)
 
 struct rule {
     /* ip header */
@@ -90,7 +96,7 @@ int is_port(char* portstr, uint16_t* portnum) {
 
 int process_8bit(char* str, uint8_t* num) {
     int i, ret;
-    for(i=0; i<strlen(str)-1; i++) {
+    for(i=0; str[i] != ';'; i++) {
         if(!isdigit(str[i]) || i == 3) {
             return -1;
         }
@@ -105,7 +111,7 @@ int process_8bit(char* str, uint8_t* num) {
 
 int process_16bit(char* str, uint16_t* num) {
     int i, ret;
-    for(i=0; i<strlen(str)-1; i++) {
+    for(i=0; str[i] != ';'; i++) {
         if(!isdigit(str[i]) || i == 5) {
             return -1;
         }
@@ -121,7 +127,7 @@ int process_16bit(char* str, uint16_t* num) {
 int process_32bit(char* str, uint32_t* num) {
     int i;
     uint32_t ret = 0;
-    for(i=0; i<strlen(str)-1; i++) {
+    for(i=0; str[i] != ';'; i++) {
         if(!isdigit(str[i]) || i == 10) {
             return -1;
         }
@@ -153,11 +159,11 @@ int main(int argc, char **argv)
     char *interface, *rule_file;
     char *errbuf;
     pcap_t *handle;
-    uint8_t *packet;
+    uint8_t *packet, *ip, *tcp, tcp_flags, *http;
     struct pcap_pkthdr header;
     FILE *fp;
     char rule_token[BUFLEN];
-    char field[20], *colon, *lquote, *rquote;
+    char field[20], *colon, *semicolon, *lquote, *rquote;
     struct rule* new_rule;
     struct rule head;
     int pattern_rule_exists, pattern_completed;
@@ -188,11 +194,20 @@ int main(int argc, char **argv)
     
     printf("IDS is running on %s and using rules written in %s\n", interface, rule_file);
     
-    if((handle = pcap_open_live(interface, BUFSIZ, 0, 1000, errbuf)) == NULL) {
+    if((handle = pcap_open_live(interface, BUFSIZ, 0, 2000, errbuf)) == NULL) {
         fprintf(stderr, "[Error]Pcap initialization has failed on %s: %s\n", interface, errbuf);
         exit(-1);
     }
 
+/*    if((handle = pcap_create(interface, errbuf)) == NULL) {
+        fprintf(stderr, "[Error]Pcap initialization has failed on %s: %s\n", interface, errbuf);
+        exit(-1);
+    }
+
+    if(pcap_activate(handle)) {
+	fprintf(stderr, "[Error]Pcap activation has failed on %s: %s\n", interface, errbuf);
+	exit(-1);
+    }*/
     if((fp = fopen(rule_file, "r")) == NULL) {
         fprintf(stderr, "[Error]File open error(file may not exist\n");
         exit(-1);
@@ -252,14 +267,16 @@ int main(int argc, char **argv)
                 fprintf(stderr, "[Error]Not valid pattern rule - no colon : given token = %s\n", rule_token);
                 break;
             }
-            if((colon = strchr(rule_token, ';')) == NULL) {
+            if((semicolon = strchr(rule_token, ';')) == NULL) {
                 fprintf(stderr, "[Error]Not valid pattern rule - no semicolon : given token = %s\n", rule_token);
                 break;
             }
             strncpy(field, rule_token + (rule_token[0] == '(' ? 1 : 0), colon - rule_token - (rule_token[0] == '(' ? 1 : 0));
             field[colon - rule_token - (rule_token[0] == '(' ? 1 : 0)] = 0;
+	    printf("parsed field name : %s\n", field);
             if(!strcmp(field, "tos")) {
                 if(process_8bit(colon+1, &(new_rule->tos)) < 0) {
+		    printf("asdfasdfasdfasdfasdf\n");
                 }
             }
             else if(!strcmp(field, "length")) {
@@ -353,6 +370,7 @@ int main(int argc, char **argv)
         if(pattern_completed) {
             insert_rule(&head, new_rule);
             rule_count++;
+	    continue;
         }
         if(colon != NULL) {
             fprintf(stderr, "[Error]Not valid pattern rule - miscellaneous : given token = %s\n", rule_token);
@@ -361,11 +379,50 @@ int main(int argc, char **argv)
     fclose(fp);
 
     printf("From %s, IDS program added %d rules.\nNow it begins to investigate packets.\n", rule_file, rule_count);
-
-/*    while(true) {
-        packet = pcap_next(handle, &header);
-        
+    while(1) {
+        while((packet = pcap_next(handle, &header)) == NULL);
+	ip = packet+ETHERNET_SIZE;
+	printf("IP header\n");
+	printf("  Version: %d\n", IP_VERSION(*(uint8_t*)(ip)));
+	printf("  Header Length: %d\n", IP_HLENGTH(*(uint8_t*)(ip)));
+	printf("  Type of Service: %d\n", *(uint8_t*)(ip+1));
+	printf("  Total Length: %d\n", *(uint16_t*)(ip+2));
+	printf("  Identification: %d\n", *(uint16_t*)(ip+4));
+	printf("  Flags: %d\n",  IP_FLAGS(*(uint8_t*)(ip+6)));
+	printf("  Fragment Offset: %d\n", IP_FRAGOFFSET(*(uint16_t*)(ip+6)));
+	printf("  TTL: %d\n", *(uint8_t*)(ip+8));
+	printf("  Protocol: %d\n", *(uint8_t*)(ip+9));
+	printf("  Header Checksum: %d\n", *(uint16_t*)(ip+10));
+	printf("  Source IP Address: %d.%d.%d.%d\n", *(uint8_t*)(ip+12), 
+						     *(uint8_t*)(ip+13), 
+						     *(uint8_t*)(ip+14), 
+						     *(uint8_t*)(ip+15));
+	printf("  Destination IP Address: %d.%d.%d.%d\n\n\n", *(uint8_t*)(ip+16), 
+						              *(uint8_t*)(ip+17), 
+							      *(uint8_t*)(ip+18), 
+							      *(uint8_t*)(ip+19));
+	tcp = ip + IP_HLENGTH(*(uint8_t*)(ip));
+	printf("TCP header\n");
+	printf("  Source Port: %d\n", *(uint16_t*)tcp);
+	printf("  Destination Port: %d\n", *(uint16_t*)(tcp+2));
+	printf("  Sequence Number: %d\n", *(uint32_t*)(tcp+4));
+	printf("  Acknowledgment Number: %d\n", *(uint32_t*)(tcp+8));
+	printf("  Data Offset: %d\n", *(uint8_t*)(tcp+12));
+	tcp_flags = *(uint8_t*)(tcp + 13);
+	printf("  Flags C: %d, E: %d, U: %d, A: %d, P: %d, R: %d, S: %d, F: %d\n", (tcp_flags & 0x80) >> 7, 
+										   (tcp_flags & 0x40) >> 6, 
+										   (tcp_flags & 0x20) >> 5, 
+										   (tcp_flags & 0x10) >> 4, 
+										   (tcp_flags & 0x08) >> 3, 
+										   (tcp_flags & 0x04) >> 2, 
+										   (tcp_flags & 0x02) >> 1, 
+										   tcp_flags & 0x01);
+	printf("  Window Size: %d\n", *(uint16_t*)(tcp+14));
+	printf("  Checksum: %d\n", *(uint16_t*)(tcp+16));
+	printf("  Urgent Pointer: %d\n\n\n", *(uint16_t*)(tcp+18));
+	http = tcp + *(uint8_t*)(tcp+12);
+	printf("  Payload: %s\n", http);
     }
-    pcap_close(handle);*/
+    pcap_close(handle);
     return 0;
 }
