@@ -29,7 +29,7 @@ struct rule {
     uint8_t ttl;
     uint32_t srcip;
     uint32_t destip;
-    
+
     /* tcp header */
     uint16_t srcport;
     uint16_t destport;
@@ -155,7 +155,7 @@ void insert_rule(struct rule *head, struct rule *new_rule) {
 
 int main(int argc, char **argv)
 {
-    int i, opt;
+    int i, opt, error, is_attack;
     char *interface, *rule_file;
     char *errbuf;
     pcap_t *handle;
@@ -164,7 +164,7 @@ int main(int argc, char **argv)
     FILE *fp;
     char rule_token[BUFLEN];
     char field[20], *colon, *semicolon, *lquote, *rquote;
-    struct rule* new_rule;
+    struct rule* new_rule, rule_iterator;
     struct rule head;
     int pattern_rule_exists, pattern_completed;
     int rule_count = 0;
@@ -191,29 +191,30 @@ int main(int argc, char **argv)
         fprintf(stderr, "Usage: ./%s -i interface_name -r rule_file_name\n", argv[0]);
         exit(-1);
     }
-    
+
     printf("IDS is running on %s and using rules written in %s\n", interface, rule_file);
-    
+
     if((handle = pcap_open_live(interface, BUFSIZ, 0, 2000, errbuf)) == NULL) {
         fprintf(stderr, "[Error]Pcap initialization has failed on %s: %s\n", interface, errbuf);
         exit(-1);
     }
 
-/*    if((handle = pcap_create(interface, errbuf)) == NULL) {
-        fprintf(stderr, "[Error]Pcap initialization has failed on %s: %s\n", interface, errbuf);
-        exit(-1);
-    }
+    /*    if((handle = pcap_create(interface, errbuf)) == NULL) {
+          fprintf(stderr, "[Error]Pcap initialization has failed on %s: %s\n", interface, errbuf);
+          exit(-1);
+          }
 
-    if(pcap_activate(handle)) {
-	fprintf(stderr, "[Error]Pcap activation has failed on %s: %s\n", interface, errbuf);
-	exit(-1);
-    }*/
+          if(pcap_activate(handle)) {
+          fprintf(stderr, "[Error]Pcap activation has failed on %s: %s\n", interface, errbuf);
+          exit(-1);
+          }*/
     if((fp = fopen(rule_file, "r")) == NULL) {
         fprintf(stderr, "[Error]File open error(file may not exist\n");
         exit(-1);
     }
     pattern_rule_exists = 1;
     while((fscanf(fp, "%s", rule_token)) != EOF) {
+        error = 0;
         new_rule = (struct rule*) malloc(sizeof(struct rule));
         memset(new_rule, 0, sizeof(struct rule));
         if(pattern_rule_exists) {
@@ -273,10 +274,10 @@ int main(int argc, char **argv)
             }
             strncpy(field, rule_token + (rule_token[0] == '(' ? 1 : 0), colon - rule_token - (rule_token[0] == '(' ? 1 : 0));
             field[colon - rule_token - (rule_token[0] == '(' ? 1 : 0)] = 0;
-	    printf("parsed field name : %s\n", field);
+            printf("parsed field name : %s\n", field);
             if(!strcmp(field, "tos")) {
                 if(process_8bit(colon+1, &(new_rule->tos)) < 0) {
-		    printf("asdfasdfasdfasdfasdf\n");
+                    printf("asdfasdfasdfasdfasdf\n");
                 }
             }
             else if(!strcmp(field, "length")) {
@@ -326,7 +327,13 @@ int main(int argc, char **argv)
                         new_rule->flags += 1 << 7;
                     }
                     else {
+                        error = 1;
+                        break;
                     }
+                }
+                if(error) {
+                    fprintf(stderr, "[Error]Not valid pattern rule - No such flag bit exists : given token =%s\n", rule_token);
+                    break;
                 }
             }
             else if(!strcmp(field, "http_request") || !strcmp(field, "content")) {
@@ -370,7 +377,7 @@ int main(int argc, char **argv)
         if(pattern_completed) {
             insert_rule(&head, new_rule);
             rule_count++;
-	    continue;
+            continue;
         }
         if(colon != NULL) {
             fprintf(stderr, "[Error]Not valid pattern rule - miscellaneous : given token = %s\n", rule_token);
@@ -381,47 +388,96 @@ int main(int argc, char **argv)
     printf("From %s, IDS program added %d rules.\nNow it begins to investigate packets.\n", rule_file, rule_count);
     while(1) {
         while((packet = pcap_next(handle, &header)) == NULL);
-	ip = packet+ETHERNET_SIZE;
-	printf("IP header\n");
-	printf("  Version: %d\n", IP_VERSION(*(uint8_t*)(ip)));
-	printf("  Header Length: %d\n", IP_HLENGTH(*(uint8_t*)(ip)));
-	printf("  Type of Service: %d\n", *(uint8_t*)(ip+1));
-	printf("  Total Length: %d\n", *(uint16_t*)(ip+2));
-	printf("  Identification: %d\n", *(uint16_t*)(ip+4));
-	printf("  Flags: %d\n",  IP_FLAGS(*(uint8_t*)(ip+6)));
-	printf("  Fragment Offset: %d\n", IP_FRAGOFFSET(*(uint16_t*)(ip+6)));
-	printf("  TTL: %d\n", *(uint8_t*)(ip+8));
-	printf("  Protocol: %d\n", *(uint8_t*)(ip+9));
-	printf("  Header Checksum: %d\n", *(uint16_t*)(ip+10));
-	printf("  Source IP Address: %d.%d.%d.%d\n", *(uint8_t*)(ip+12), 
-						     *(uint8_t*)(ip+13), 
-						     *(uint8_t*)(ip+14), 
-						     *(uint8_t*)(ip+15));
-	printf("  Destination IP Address: %d.%d.%d.%d\n\n\n", *(uint8_t*)(ip+16), 
-						              *(uint8_t*)(ip+17), 
-							      *(uint8_t*)(ip+18), 
-							      *(uint8_t*)(ip+19));
-	tcp = ip + IP_HLENGTH(*(uint8_t*)(ip));
-	printf("TCP header\n");
-	printf("  Source Port: %d\n", *(uint16_t*)tcp);
-	printf("  Destination Port: %d\n", *(uint16_t*)(tcp+2));
-	printf("  Sequence Number: %d\n", *(uint32_t*)(tcp+4));
-	printf("  Acknowledgment Number: %d\n", *(uint32_t*)(tcp+8));
-	printf("  Data Offset: %d\n", *(uint8_t*)(tcp+12));
-	tcp_flags = *(uint8_t*)(tcp + 13);
-	printf("  Flags C: %d, E: %d, U: %d, A: %d, P: %d, R: %d, S: %d, F: %d\n", (tcp_flags & 0x80) >> 7, 
-										   (tcp_flags & 0x40) >> 6, 
-										   (tcp_flags & 0x20) >> 5, 
-										   (tcp_flags & 0x10) >> 4, 
-										   (tcp_flags & 0x08) >> 3, 
-										   (tcp_flags & 0x04) >> 2, 
-										   (tcp_flags & 0x02) >> 1, 
-										   tcp_flags & 0x01);
-	printf("  Window Size: %d\n", *(uint16_t*)(tcp+14));
-	printf("  Checksum: %d\n", *(uint16_t*)(tcp+16));
-	printf("  Urgent Pointer: %d\n\n\n", *(uint16_t*)(tcp+18));
-	http = tcp + *(uint8_t*)(tcp+12);
-	printf("  Payload: %s\n", http);
+        rule_iterator = head.next_rule;
+        is_attack = 0;
+        while(rule_iterator != NULL) {
+            if(rule_iterator->tos != *(uint8_t*)(ip+1)) {
+                continue;
+            }
+            if(rule_iterator->length != *(uint16_t*)(ip+2)) {
+                continue;
+            }
+            if(rule_iterator->fragoffset != *(uint16_t*)(ip+4)) {
+                continue;
+            }
+            if(rule_iterator->ttl != *(uint8_t*)(ip+8)) {
+                continue;
+            }
+            if(rule_iterator->protocol != *(uint8_t*)(ip+9)) {
+                continue;
+            }
+            if(rule_iterator->seq != *(uint32_t*)(tcp+4)) {
+                continue;
+            }
+            if(rule_iterator->ack != *(uint32_t*)(tcp+8)) {
+                continue;
+            }
+            if(rule_iterator->flags != *(uint8_t*)(tcp+13)) {
+                continue;
+            }
+            if(rule_iterator->srcip != *(uint32_t*)(ip+12)) {
+                continue;
+            }
+            if(rule_iterator->destip != *(uint32_t*)(ip+16)) {
+                continue;
+            }
+            if(rule_iterator->srcport != *(uint16_t*)tcp) {
+                continue;
+            }
+            if(rule_iterator->destport != *(uint16_t*)(tcp+2)) {
+                continue;
+            }
+            if(strcmp(rule_iterator->http_request, header)) {
+                continue;
+            }
+            if(strcmp(rule_iterator->content, payload)) {
+                continue;   
+            }
+            is_attack = 1;
+            break;
+        }
+        ip = packet+ETHERNET_SIZE;
+        printf("IP header\n");
+        printf("  Version: %d\n", IP_VERSION(*(uint8_t*)(ip)));
+        printf("  Header Length: %d\n", IP_HLENGTH(*(uint8_t*)(ip)));
+        printf("  Type of Service: %d\n", *(uint8_t*)(ip+1));
+        printf("  Total Length: %d\n", *(uint16_t*)(ip+2));
+        printf("  Identification: %d\n", *(uint16_t*)(ip+4));
+        printf("  Flags: %d\n",  IP_FLAGS(*(uint8_t*)(ip+6)));
+        printf("  Fragment Offset: %d\n", IP_FRAGOFFSET(*(uint16_t*)(ip+6)));
+        printf("  TTL: %d\n", *(uint8_t*)(ip+8));
+        printf("  Protocol: %d\n", *(uint8_t*)(ip+9));
+        printf("  Header Checksum: %d\n", *(uint16_t*)(ip+10));
+        printf("  Source IP Address: %d.%d.%d.%d\n", *(uint8_t*)(ip+12), 
+                *(uint8_t*)(ip+13), 
+                *(uint8_t*)(ip+14), 
+                *(uint8_t*)(ip+15));
+        printf("  Destination IP Address: %d.%d.%d.%d\n\n\n", *(uint8_t*)(ip+16), 
+                *(uint8_t*)(ip+17), 
+                *(uint8_t*)(ip+18), 
+                *(uint8_t*)(ip+19));
+        tcp = ip + IP_HLENGTH(*(uint8_t*)(ip));
+        printf("TCP header\n");
+        printf("  Source Port: %d\n", *(uint16_t*)tcp);
+        printf("  Destination Port: %d\n", *(uint16_t*)(tcp+2));
+        printf("  Sequence Number: %d\n", *(uint32_t*)(tcp+4));
+        printf("  Acknowledgment Number: %d\n", *(uint32_t*)(tcp+8));
+        printf("  Data Offset: %d\n", *(uint8_t*)(tcp+12));
+        tcp_flags = *(uint8_t*)(tcp + 13);
+        printf("  Flags C: %d, E: %d, U: %d, A: %d, P: %d, R: %d, S: %d, F: %d\n", (tcp_flags & 0x80) >> 7, 
+                (tcp_flags & 0x40) >> 6, 
+                (tcp_flags & 0x20) >> 5, 
+                (tcp_flags & 0x10) >> 4, 
+                (tcp_flags & 0x08) >> 3, 
+                (tcp_flags & 0x04) >> 2, 
+                (tcp_flags & 0x02) >> 1, 
+                tcp_flags & 0x01);
+        printf("  Window Size: %d\n", *(uint16_t*)(tcp+14));
+        printf("  Checksum: %d\n", *(uint16_t*)(tcp+16));
+        printf("  Urgent Pointer: %d\n\n\n", *(uint16_t*)(tcp+18));
+        http = tcp + *(uint8_t*)(tcp+12);
+        printf("  Payload: %s\n", http);
+        printf("  %s\n", is_attack ? "
     }
     pcap_close(handle);
     return 0;
