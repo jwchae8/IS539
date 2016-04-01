@@ -16,10 +16,11 @@
 #define ETHERNET_SIZE 14
 #define BUFLEN 2048
 
-#define IP_VERSION(X) ((X >> 4) & 0x0f)
+#define IP_VERSION(x) ((x >> 4) & 0x0f)
 #define IP_HLENGTH(X) (X & 0x0f)
 #define IP_FLAGS(X) ((X >> 5) & 0x07)
 #define IP_FRAGOFFSET(X) (X & 0x1fff)
+#define TCP_DATAOFFSET(x) ((x >> 4) & 0x0f)
 
 struct rule {
     /* Don't Care/ Care bit */
@@ -154,7 +155,14 @@ void insert_rule(struct rule *head, struct rule *new_rule) {
     iterator->next_rule = new_rule;
 }
 
-
+char* print_highlight(struct rule* match, int bit) {
+    if(match != NULL) {
+	if(match->care & (1 << bit)) {
+	    return "***";
+	}
+    }
+    return "";
+}
 
 int main(int argc, char **argv)
 {
@@ -162,13 +170,13 @@ int main(int argc, char **argv)
     char *interface, *rule_file;
     char *errbuf;
     pcap_t *handle;
-    uint8_t *packet, *ip, *tcp, tcp_flags, *http;
+    uint8_t *packet, *ip, *tcp, tcp_flags, *http, *tcp_payload;
     struct pcap_pkthdr header;
     FILE *fp;
     char rule_token[BUFLEN];
     char field[20], *colon, *semicolon, *lquote, *rquote;
     struct rule* new_rule, *rule_iterator;
-    struct rule head;
+    struct rule head, *match_rule, *except_content_rule;
     int pattern_rule_exists, pattern_completed;
     int rule_count = 0;
 
@@ -202,15 +210,6 @@ int main(int argc, char **argv)
         exit(-1);
     }
 
-    /*    if((handle = pcap_create(interface, errbuf)) == NULL) {
-          fprintf(stderr, "[Error]Pcap initialization has failed on %s: %s\n", interface, errbuf);
-          exit(-1);
-          }
-
-          if(pcap_activate(handle)) {
-          fprintf(stderr, "[Error]Pcap activation has failed on %s: %s\n", interface, errbuf);
-          exit(-1);
-          }*/
     if((fp = fopen(rule_file, "r")) == NULL) {
         fprintf(stderr, "[Error]File open error(file may not exist\n");
         exit(-1);
@@ -299,7 +298,6 @@ int main(int argc, char **argv)
             }
             strncpy(field, rule_token + (rule_token[0] == '(' ? 1 : 0), colon - rule_token - (rule_token[0] == '(' ? 1 : 0));
             field[colon - rule_token - (rule_token[0] == '(' ? 1 : 0)] = 0;
-            printf("parsed field name : %s\n", field);
             if(!strcmp(field, "tos")) {
                 if(process_8bit(colon+1, &(new_rule->tos)) < 0) {
                     fprintf(stderr, "[Error]Not valid pattern rule - invalid tos value : given token = %s\n", rule_token);
@@ -374,6 +372,9 @@ int main(int argc, char **argv)
                     else if(colon[i] == 'E') {
                         new_rule->flags += 1 << 7;
                     }
+		    else if(colon[i] == '0') {
+			break;
+		    }
                     else {
                         free(new_rule);
                         error = 1;
@@ -407,13 +408,13 @@ int main(int argc, char **argv)
                 if(!strcmp(field, "http_request")) {
                     new_rule->http_request = (unsigned char*) malloc(sizeof(unsigned char) * (rquote - lquote) + 1);
                     strncpy(new_rule->http_request, lquote+1, rquote - lquote);
-                    new_rule->http_request[rquote - lquote] = 0;
+                    new_rule->http_request[rquote - lquote - 1] = 0;
                     new_rule->care += 1 << 11;
                 }
                 else {
                     new_rule->content = (unsigned char*) malloc(sizeof(unsigned char) * (rquote - lquote) + 1);
                     strncpy(new_rule->content, lquote+1, rquote - lquote);
-                    new_rule->content[rquote - lquote] = 0;
+                    new_rule->content[rquote - lquote - 1] = 0;
                     new_rule->care += 1 << 12;
                 }
             }
@@ -440,12 +441,26 @@ int main(int argc, char **argv)
     printf("From %s, IDS program added %d rules.\nNow it begins to investigate packets.\n", rule_file, rule_count);
     while(1) {
         while((packet = pcap_next(handle, &header)) == NULL);
-        rule_iterator = head.next_rule;
+        rule_iterator = &head;
         is_attack = 0;
         ip = packet + ETHERNET_SIZE;
         tcp = ip + 4*IP_HLENGTH(*(uint8_t*)(ip));
-        http = tcp + 4*(*(uint8_t*)(tcp+12));
+        tcp_payload = tcp + 4*TCP_DATAOFFSET((*(uint8_t*)(tcp+12)));
+	if(!strncmp(tcp_payload, "GET", 3) || !strncmp(tcp_payload, "PUT", 3) || !strncmp(tcp_payload, "POST", 4) || !strncmp(tcp_payload, "HEAD", 4) || !strncmp(tcp_payload, "DELETE", 6) || !strncmp(tcp_payload, "TRACE", 5) || !strncmp(tcp_payload, "CONNECT", 7)) {
+	    http = (unsigned char *)malloc((uint8_t*)strchr(tcp_payload, '\r') - tcp_payload + 2);
+	    strncpy(http, tcp_payload, (uint8_t*)strchr(tcp_payload, '\r') - tcp_payload + 1);
+	    http[(uint8_t*)strchr(tcp_payload, '\r') - tcp_payload + 1] = 0;
+	    tcp_payload = strchr(tcp_payload, '\r') + 2;
+	}
+	else {
+	    http = NULL;
+	}
+	match_rule = NULL;
+	except_content_rule = NULL;
         while((rule_iterator = rule_iterator->next_rule) != NULL) {
+	    if(*(uint8_t*)(ip+9) != 6) {
+		continue;
+	    }
             if(rule_iterator->care & 0x1 && rule_iterator->tos != ntohs(*(uint8_t*)(ip+1))) {
                 continue;
             }
@@ -479,80 +494,101 @@ int main(int argc, char **argv)
             if(rule_iterator->care & 0x80 && rule_iterator->destport != ntohs(*(uint16_t*)(tcp+2))) {
                 continue;
             }
-            /*if(rule_iterator->care & 0x800 && strcmp(rule_iterator->http_request, header)) {
-                continue;
+            if(rule_iterator->care & 0x800) {
+		if(http == NULL || (http != NULL && strstr(http, rule_iterator->http_request) == NULL)) {
+                    continue;
+		}
             }
-            if(rule_iterator->care & 0x1000 && strcmp(rule_iterator->content, payload)) {
+            if(rule_iterator->care & 0x1000 && strstr(tcp_payload, rule_iterator->content) == NULL) {
+		except_content_rule = rule_iterator;
                 continue;   
-            }*/
-            is_attack = 1;
+            }
+	    match_rule = rule_iterator;
             break;
         }
         printf("IP header\n");
         printf("  Version: %d\n", IP_VERSION(*(uint8_t*)(ip)));
         printf("  Header Length: %d\n", IP_HLENGTH(*(uint8_t*)(ip)));
-        printf("  Type of Service: %d\n", ntohs(*(uint8_t*)(ip+1)));
-        printf("  Total Length: %d\n", ntohs(*(uint16_t*)(ip+2)));
+        printf("  %sType of Service: %d%s\n", print_highlight(match_rule, 0), ntohs(*(uint8_t*)(ip+1)), print_highlight(match_rule, 0));
+        printf("  %sTotal Length: %d%s\n", print_highlight(match_rule, 1), ntohs(*(uint16_t*)(ip+2)), print_highlight(match_rule, 1));
         printf("  Identification: %d\n", ntohs(*(uint16_t*)(ip+4)));
         printf("  Flags: %d\n",  IP_FLAGS(*(uint8_t*)(ip+6)));
-        printf("  Fragment Offset: %d\n", IP_FRAGOFFSET(ntohs(*(uint16_t*)(ip+6))));
-        printf("  TTL: %d\n", *(uint8_t*)(ip+8));
-        printf("  Protocol: %d\n", *(uint8_t*)(ip+9));
+        printf("  %sFragment Offset: %d%s\n", print_highlight(match_rule, 2), IP_FRAGOFFSET(ntohs(*(uint16_t*)(ip+6))), print_highlight(match_rule, 2));
+        printf("  %sTTL: %d%s\n", print_highlight(match_rule, 3), *(uint8_t*)(ip+8), print_highlight(match_rule,3));
+        printf("  %sProtocol: %d%s\n", match_rule != NULL && *(uint8_t*)(ip+9) == 6? "***" : "", *(uint8_t*)(ip+9), match_rule != NULL && *(uint8_t*)(ip+9) == 6 ? "***" : "");
         printf("  Header Checksum: %d\n", ntohs(*(uint16_t*)(ip+10)));
-        printf("  Source IP Address: %d.%d.%d.%d\n", *(uint8_t*)(ip+12), 
+        printf("  %sSource IP Address: %d.%d.%d.%d%s\n", print_highlight(match_rule, 4), *(uint8_t*)(ip+12), 
                 *(uint8_t*)(ip+13), 
                 *(uint8_t*)(ip+14), 
-                *(uint8_t*)(ip+15));
-        printf("  Destination IP Address: %d.%d.%d.%d\n\n\n", *(uint8_t*)(ip+16), 
+                *(uint8_t*)(ip+15), print_highlight(match_rule, 4));
+        printf("  %sDestination IP Address: %d.%d.%d.%d%s\n\n\n", print_highlight(match_rule, 5), *(uint8_t*)(ip+16), 
                 *(uint8_t*)(ip+17), 
                 *(uint8_t*)(ip+18), 
-                *(uint8_t*)(ip+19));
-        printf("TCP header\n");
-        printf("  Source Port: %d\n", ntohs(*(uint16_t*)tcp));
-        printf("  Destination Port: %d\n", ntohs(*(uint16_t*)(tcp+2)));
-        printf("  Sequence Number: %u\n", *(uint32_t*)(tcp+4));
-        printf("  Acknowledgment Number: %u\n", *(uint32_t*)(tcp+8));
-        printf("  Data Offset: %d\n", *(uint8_t*)(tcp+12));
-        tcp_flags = *(uint8_t*)(tcp + 13);
-        printf("  Flags C: %d, E: %d, U: %d, A: %d, P: %d, R: %d, S: %d, F: %d\n", (tcp_flags & 0x80) >> 7, 
-                (tcp_flags & 0x40) >> 6, 
-                (tcp_flags & 0x20) >> 5, 
-                (tcp_flags & 0x10) >> 4, 
-                (tcp_flags & 0x08) >> 3, 
-                (tcp_flags & 0x04) >> 2, 
-                (tcp_flags & 0x02) >> 1, 
-                tcp_flags & 0x01);
-        printf("  Window Size: %d\n", ntohs(*(uint16_t*)(tcp+14)));
-        printf("  Checksum: %d\n", ntohs(*(uint16_t*)(tcp+16)));
-        printf("  Urgent Pointer: %d\n\n\n", ntohs(*(uint16_t*)(tcp+18)));
-        printf("  Payload:\n");
-	for(i=0; i<strlen(http); i++) {
-	    if(i % 16 == 0) {
-		printf("|");
-	    }
-	    printf("%02x ", http[i]);
-	    if(i % 16 == 15) {
-		printf("|     %c%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c\n", isprint(http[i-15])? http[i-15] : '.', 
-						   		   isprint(http[i-14])? http[i-14] : '.', 
-						   		   isprint(http[i-13])? http[i-13] : '.',
-						   		   isprint(http[i-12])? http[i-12] : '.',
-						   		   isprint(http[i-11])? http[i-11] : '.', 
-						   		   isprint(http[i-10])? http[i-10] : '.', 
-						   		   isprint(http[i-9])? http[i-9] : '.',
-						   		   isprint(http[i-8])? http[i-8] : '.',
-						   		   isprint(http[i-7])? http[i-7] : '.', 
-						   		   isprint(http[i-6])? http[i-6] : '.', 
-						   		   isprint(http[i-5])? http[i-5] : '.',
-						   		   isprint(http[i-4])? http[i-4] : '.',
-						   		   isprint(http[i-3])? http[i-3] : '.', 
-						   		   isprint(http[i-2])? http[i-2] : '.', 
-						   		   isprint(http[i-1])? http[i-1] : '.',
-						   		   isprint(http[i-0])? http[i-0] : '.');
+                *(uint8_t*)(ip+19), print_highlight(match_rule, 5));
+	if(*(uint8_t*)(ip+9) == 6) {
+        	printf("TCP header\n");
+        	printf("  %sSource Port: %d%s\n", print_highlight(match_rule, 6), ntohs(*(uint16_t*)tcp), print_highlight(match_rule, 6));
+        	printf("  %sDestination Port: %d%s\n", print_highlight(match_rule, 7), ntohs(*(uint16_t*)(tcp+2)), print_highlight(match_rule, 7));
+        	printf("  %sSequence Number: %u%s\n", print_highlight(match_rule, 8), *(uint32_t*)(tcp+4), print_highlight(match_rule, 8));
+        	printf("  %sAcknowledgment Number: %u%s\n", print_highlight(match_rule, 9), *(uint32_t*)(tcp+8), print_highlight(match_rule, 9));
+        	printf("  Data Offset: %d\n", TCP_DATAOFFSET(*(uint8_t*)(tcp+12)));
+        	tcp_flags = *(uint8_t*)(tcp + 13);
+        	printf("  %sFlags C: %d, E: %d, U: %d, A: %d, P: %d, R: %d, S: %d, F: %d%s\n", print_highlight(match_rule, 10), (tcp_flags & 0x80) >> 7, 
+                	(tcp_flags & 0x40) >> 6, 
+                	(tcp_flags & 0x20) >> 5, 
+                	(tcp_flags & 0x10) >> 4, 
+                	(tcp_flags & 0x08) >> 3, 
+                	(tcp_flags & 0x04) >> 2, 
+                	(tcp_flags & 0x02) >> 1, 
+                	tcp_flags & 0x01, print_highlight(match_rule, 10));
+        	printf("  Window Size: %d\n", ntohs(*(uint16_t*)(tcp+14)));
+        	printf("  Checksum: %d\n", ntohs(*(uint16_t*)(tcp+16)));
+        	printf("  Urgent Pointer: %d\n\n\n", ntohs(*(uint16_t*)(tcp+18)));
+        	printf("  Payload:\n");
+		if(http != NULL) {
+		    printf("  %shttp_request: %s%s\n\n", print_highlight(match_rule, 11), http, print_highlight(match_rule, 11));
+		}
+		for(i=0; i<strlen(tcp_payload); i++) {
+		    if(i % 16 == 0) {
+			printf("|");
+		    }
+		    printf("%02x ", tcp_payload[i]);
+		    if(i % 16 == 15) {
+			printf("|     %c%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c\n", isprint(tcp_payload[i-15])? tcp_payload[i-15] : '.', 
+							   		   isprint(tcp_payload[i-14])? tcp_payload[i-14] : '.', 
+							   		   isprint(tcp_payload[i-13])? tcp_payload[i-13] : '.',
+							   		   isprint(tcp_payload[i-12])? tcp_payload[i-12] : '.',
+							   		   isprint(tcp_payload[i-11])? tcp_payload[i-11] : '.', 
+							   		   isprint(tcp_payload[i-10])? tcp_payload[i-10] : '.', 
+							   		   isprint(tcp_payload[i-9])? tcp_payload[i-9] : '.',
+							   		   isprint(tcp_payload[i-8])? tcp_payload[i-8] : '.',
+							   		   isprint(tcp_payload[i-7])? tcp_payload[i-7] : '.', 
+							   		   isprint(tcp_payload[i-6])? tcp_payload[i-6] : '.', 
+							   		   isprint(tcp_payload[i-5])? tcp_payload[i-5] : '.',
+							   		   isprint(tcp_payload[i-4])? tcp_payload[i-4] : '.',
+							   		   isprint(tcp_payload[i-3])? tcp_payload[i-3] : '.', 
+							   		   isprint(tcp_payload[i-2])? tcp_payload[i-2] : '.', 
+							   		   isprint(tcp_payload[i-1])? tcp_payload[i-1] : '.',
+							   		   isprint(tcp_payload[i-0])? tcp_payload[i-0] : '.');
+	
+	
+		    }
+		}
+		printf("\n\n\n");
+		if(match_rule != NULL) {
+		    if(match_rule->content != NULL) {
+			printf("Pattern: \'%s\' has been detected!\n",match_rule->content);
+		    }
+		    printf("Rule has been matched to the packet!\n\n\n");
+		}
+		else if(except_content_rule != NULL && except_content_rule->content != NULL) {
+		    printf("Pattern: \'%s\' has not been detected!\n\n\n", except_content_rule->content);
+		}
+		if(http != NULL) {
+	    	    free(http);
+		}
 
-
-	    }
 	}
-	printf("\n\n\n");
     }
     pcap_close(handle);
     return 0;
