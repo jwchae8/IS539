@@ -70,7 +70,7 @@ int is_ip(char* ipstr, uint32_t* ipnum) {
         if(ip_a > UINT8_MAX || ip_b > UINT8_MAX || ip_c > UINT8_MAX || ip_d > UINT8_MAX) {
             return -1;
         }
-        *ipnum = ip_a << 24 + ip_b << 16 + ip_c << 8 + ip_d;
+        *ipnum = (ip_a << 24) + (ip_b << 16) + (ip_c << 8) + ip_d;
     }
     else {
         *ipnum = 0;
@@ -499,7 +499,7 @@ int main(int argc, char **argv)
                     continue;
 		}
             }
-            if(rule_iterator->care & 0x1000 && strstr(tcp_payload, rule_iterator->content) == NULL) {
+            if(rule_iterator->care & 0x1000 && memmem(tcp_payload, ntohs(*(uint16_t*)(ip+2)) - 4 * IP_HLENGTH(*(uint8_t*)(ip)) - 4 * TCP_DATAOFFSET(*(uint8_t*)(tcp+12)),rule_iterator->content, strlen(rule_iterator->content)) == NULL) {
 		except_content_rule = rule_iterator;
                 continue;   
             }
