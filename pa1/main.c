@@ -1,3 +1,11 @@
+/*---------------------------------------- -*/
+/*                                          */
+/*        IS539 Programming Assignment1     */
+/*           20153623 Jongwook Chae         */
+/*                                          */
+/*--------------------------------------- --*/
+
+
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -10,20 +18,34 @@
 #include <arpa/inet.h>
 
 
+/* MACRO for port range */
 #define PORT_MAX 65535
 #define PORT_MIN 0
 
+/* MACRO for data size */
 #define ETHERNET_SIZE 14
 #define BUFLEN 2048
 
+
+
+/*------------------------------------------*/
+
+/*       MACRO FOR PACKET HEADER            */ 
+/*     FIELDS SMALLER THAN A BYTE           */
+
+/*------------------------------------------*/
 #define IP_VERSION(x) ((x >> 4) & 0x0f)
 #define IP_HLENGTH(X) (X & 0x0f)
 #define IP_FLAGS(X) ((X >> 5) & 0x07)
 #define IP_FRAGOFFSET(X) (X & 0x1fff)
 #define TCP_DATAOFFSET(x) ((x >> 4) & 0x0f)
+/*-------------------------------------------*/
+
+
 
 struct rule {
     /* Don't Care/ Care bit */
+    /* Each bit indicates whether each field should be considered or not */
     uint16_t care;
 
     /* ip header */
@@ -50,7 +72,8 @@ struct rule {
 };
 
 
-
+/* Converts ip address in string to unsigned int */
+/* It returns 0 on success and -1 on failure     */
 int is_ip(char* ipstr, uint32_t* ipnum) {
     int i, dot_count = 0;
     uint32_t ip_a, ip_b, ip_c, ip_d;
@@ -78,6 +101,8 @@ int is_ip(char* ipstr, uint32_t* ipnum) {
     return 0;
 }
 
+/* Converts port in string to unsigned int   */
+/* It returns 0 on success and -1 on failure */
 int is_port(char* portstr, uint16_t* portnum) {
     int i, tmp;
     if(strcmp(portstr, "any")) {
@@ -97,6 +122,10 @@ int is_port(char* portstr, uint16_t* portnum) {
     }
     return 0;
 }
+
+/* Three functions below converts value in string to unsigned int */
+/* Each of them handles 8bit, 16bit, and 32bit data               */
+/* Returns -1 on failure and 0 on success                         */
 
 int process_8bit(char* str, uint8_t* num) {
     int i, ret;
@@ -146,7 +175,9 @@ int process_32bit(char* str, uint32_t* num) {
     *num = (uint8_t) ret;
     return 0;
 }
+/*----------------------------------------------------------------------*/
 
+/* Insert new rule struct into linked list */
 void insert_rule(struct rule *head, struct rule *new_rule) {
     struct rule *iterator = head;
     while(iterator->next_rule != NULL) {
@@ -155,6 +186,7 @@ void insert_rule(struct rule *head, struct rule *new_rule) {
     iterator->next_rule = new_rule;
 }
 
+/* For printing highlight. It sees whether matched rule exists and care bit is set */
 char* print_highlight(struct rule* match, int bit) {
     if(match != NULL) {
 	if(match->care & (1 << bit)) {
@@ -166,20 +198,21 @@ char* print_highlight(struct rule* match, int bit) {
 
 int main(int argc, char **argv)
 {
-    int i, opt, error, is_attack;
-    char *interface, *rule_file;
-    char *errbuf;
-    pcap_t *handle;
-    uint8_t *packet, *ip, *tcp, tcp_flags, *http, *tcp_payload;
-    struct pcap_pkthdr header;
-    FILE *fp;
-    char rule_token[BUFLEN];
-    char field[20], *colon, *semicolon, *lquote, *rquote;
-    struct rule* new_rule, *rule_iterator;
-    struct rule head, *match_rule, *except_content_rule;
-    int pattern_rule_exists, pattern_completed;
-    int rule_count = 0;
+    int i, opt, error; // For loop index, argument parsing, branch control
+    char *interface, *rule_file; // For saving arguments : interface name and rule file name
+    char *errbuf; // For saving error message from pcap functions
+    pcap_t *handle; // Pcap handle
+    uint8_t *packet, *ip, *tcp, tcp_flags, *http, *tcp_payload; // Ethernet frame, IP header, TCP header, TCP flag, HTTP header, TCP payload
+    struct pcap_pkthdr header; // Pcap header struct
+    FILE *fp; // File pointer for reading rule file
+    char rule_token[BUFLEN]; // Rule file tokens
+    char field[20], *colon, *semicolon, *lquote, *rquote; // Field for pattern, position of :, ;, ", "
+    struct rule* new_rule, *rule_iterator; // Pointer for additional rule and iterator of linked list
+    struct rule head, *match_rule, *except_content_rule; // Head of linked list, matched list, list matching only without content rule
+    int pattern_rule_exists, pattern_completed; // For Rule parsing failure tolerance
+    int rule_count = 0; // For statistics
 
+    /* argument parsing */
     while((opt = getopt(argc, argv, "i:r:")) != -1) {
         switch(opt) {
             case 'i':
@@ -204,7 +237,7 @@ int main(int argc, char **argv)
     }
 
     printf("IDS is running on %s and using rules written in %s\n", interface, rule_file);
-
+    /* Pcap handle initialization */
     if((handle = pcap_open_live(interface, BUFSIZ, 0, 2000, errbuf)) == NULL) {
         fprintf(stderr, "[Error]Pcap initialization has failed on %s: %s\n", interface, errbuf);
         exit(-1);
@@ -215,6 +248,7 @@ int main(int argc, char **argv)
         exit(-1);
     }
     pattern_rule_exists = 1;
+    /* Rule parsing */
     while((fscanf(fp, "%s", rule_token)) != EOF) {
         error = 0;
         new_rule = (struct rule*) malloc(sizeof(struct rule));
@@ -285,6 +319,7 @@ int main(int argc, char **argv)
             free(new_rule);
             continue;
         }
+        /* For pattern rules */
         do{
             if((colon = strchr(rule_token, ':')) == NULL) {
                 fprintf(stderr, "[Error]Not valid pattern rule - no colon : given token = %s\n", rule_token);
@@ -437,12 +472,11 @@ int main(int argc, char **argv)
         }
     }
     fclose(fp);
-
+    /* IDS starts! */
     printf("From %s, IDS program added %d rules.\nNow it begins to investigate packets.\n", rule_file, rule_count);
     while(1) {
         while((packet = pcap_next(handle, &header)) == NULL);
         rule_iterator = &head;
-        is_attack = 0;
         ip = packet + ETHERNET_SIZE;
         tcp = ip + 4*IP_HLENGTH(*(uint8_t*)(ip));
         tcp_payload = tcp + 4*TCP_DATAOFFSET((*(uint8_t*)(tcp+12)));
