@@ -7,7 +7,7 @@
 #include <string.h>
 #include <malloc.h>
 #include <pcap/pcap.h>
-
+#include <arpa/inet.h>
 
 
 #define PORT_MAX 65535
@@ -22,6 +22,9 @@
 #define IP_FRAGOFFSET(X) (X & 0x1fff)
 
 struct rule {
+    /* Don't Care/ Care bit */
+    uint16_t care;
+
     /* ip header */
     uint8_t tos;
     uint16_t length;
@@ -164,7 +167,7 @@ int main(int argc, char **argv)
     FILE *fp;
     char rule_token[BUFLEN];
     char field[20], *colon, *semicolon, *lquote, *rquote;
-    struct rule* new_rule, rule_iterator;
+    struct rule* new_rule, *rule_iterator;
     struct rule head;
     int pattern_rule_exists, pattern_completed;
     int rule_count = 0;
@@ -226,31 +229,50 @@ int main(int argc, char **argv)
         }
         if(strcmp(rule_token, "tcp")) {
             fprintf(stderr, "[Error]Undefined protocol : protocol of rule must be \'tcp\': given token = %s\n", rule_token);
+            free(new_rule);
             continue;
         }
         fscanf(fp, "%s", rule_token);
         if(is_ip(rule_token, &(new_rule->srcip)) < 0) {
             fprintf(stderr, "[Error]Not valid ip number : given token = %s\n", rule_token);
+            free(new_rule);
             continue;
+        }
+        if(new_rule->srcip != 0) {
+            new_rule->care += 1 << 4;
         }
         fscanf(fp, "%s", rule_token);
         if(is_port(rule_token, &(new_rule->srcport)) < 0) {
             fprintf(stderr, "[Error]Not valid port number : given token = %s\n", rule_token);
+            free(new_rule);
             continue;
+        }
+        if(new_rule->srcport != 0) {
+            new_rule->care += 1 << 6;
         }
         fscanf(fp, "%s", rule_token);
         if(strcmp(rule_token, "->")) {
             fprintf(stderr, "[Error]Not correct format : this rule lacks directional mark: given token = %s\n", rule_token);
+            free(new_rule);
+            continue;
         }
         fscanf(fp, "%s", rule_token);
         if(is_ip(rule_token, &(new_rule->destip)) < 0) {
             fprintf(stderr, "[Error]Not valid ip number : given token = %s\n", rule_token);
+            free(new_rule);
             continue;
+        }
+        if(new_rule->destip != 0) {
+            new_rule->care += 1 << 5;
         }
         fscanf(fp, "%s", rule_token);
         if(is_port(rule_token, &(new_rule->destport)) < 0) {
             fprintf(stderr, "[Error]Not valid port number : given token = %s\n", rule_token);
+            free(new_rule);
             continue;
+        }
+        if(new_rule->destport != 0) {
+            new_rule->care += 1 << 7;
         }
         fscanf(fp, "%s", rule_token);
         if(!strcmp(rule_token, "alert")) {
@@ -261,15 +283,18 @@ int main(int argc, char **argv)
         pattern_completed = 0;
         if(rule_token[0] != '(') {
             fprintf(stderr, "[Error]Not valid pattern rule - it should be surrounded with ( and ) : given token = %s\n", rule_token);
+            free(new_rule);
             continue;
         }
         do{
             if((colon = strchr(rule_token, ':')) == NULL) {
                 fprintf(stderr, "[Error]Not valid pattern rule - no colon : given token = %s\n", rule_token);
+                free(new_rule);
                 break;
             }
             if((semicolon = strchr(rule_token, ';')) == NULL) {
                 fprintf(stderr, "[Error]Not valid pattern rule - no semicolon : given token = %s\n", rule_token);
+                free(new_rule);
                 break;
             }
             strncpy(field, rule_token + (rule_token[0] == '(' ? 1 : 0), colon - rule_token - (rule_token[0] == '(' ? 1 : 0));
@@ -277,31 +302,54 @@ int main(int argc, char **argv)
             printf("parsed field name : %s\n", field);
             if(!strcmp(field, "tos")) {
                 if(process_8bit(colon+1, &(new_rule->tos)) < 0) {
-                    printf("asdfasdfasdfasdfasdf\n");
+                    fprintf(stderr, "[Error]Not valid pattern rule - invalid tos value : given token = %s\n", rule_token);
+                    free(new_rule);
+                    break;
                 }
+                new_rule->care += 1;
             }
             else if(!strcmp(field, "length")) {
                 if(process_16bit(colon+1, &(new_rule->length)) < 0) {
+                    fprintf(stderr, "[Error]Not valid pattern rule - invalid length value : given token = %s\n", rule_token);
+                    free(new_rule);
+                    break;
                 }
+                new_rule->care += 1 << 1;
             }
             else if(!strcmp(field, "fragoffset")) {
                 if(process_16bit(colon+1, &(new_rule->fragoffset)) < 0) {
+                    fprintf(stderr, "[Error]Not valid pattern rule - invalid tos value : given token = %s\n", rule_token);
+                    free(new_rule);
+                    break;
                 }
+                new_rule->care += 1 << 2;
             }
             else if(!strcmp(field, "ttl")) { 
                 if(process_8bit(colon+1, &(new_rule->ttl)) < 0) {
+                    fprintf(stderr, "[Error]Not valid pattern rule - invalid ttl value : given token = %s\n", rule_token);
+                    free(new_rule);
+                    break;
                 }
+                new_rule->care += 1 << 3;
             }
             else if(!strcmp(field, "seq")) {
                 if(process_32bit(colon+1, &(new_rule->seq)) < 0) {
+                    fprintf(stderr, "[Error]Not valid pattern rule - invalid seq value : given token = %s\n", rule_token);
+                    free(new_rule);
+                    break;
                 }
+                new_rule->care += 1 << 8;
             }
             else if(!strcmp(field, "ack")) {
                 if(process_32bit(colon+1, &(new_rule->ack)) < 0) {
+                    fprintf(stderr, "[Error]Not valid pattern rule - invalid ack value : given token = %s\n", rule_token);
+                    free(new_rule);
+                    break;
                 }
+                new_rule->care += 1 << 9;
             }
             else if(!strcmp(field, "flags")) {
-                for(i=1; i<strlen(colon+1); i++) {
+                for(i=1; colon[i] != ';' ; i++) {
                     if(colon[i] == 'F') {
                         new_rule->flags += 1;
                     }
@@ -327,6 +375,7 @@ int main(int argc, char **argv)
                         new_rule->flags += 1 << 7;
                     }
                     else {
+                        free(new_rule);
                         error = 1;
                         break;
                     }
@@ -335,6 +384,7 @@ int main(int argc, char **argv)
                     fprintf(stderr, "[Error]Not valid pattern rule - No such flag bit exists : given token =%s\n", rule_token);
                     break;
                 }
+                new_rule->care += 1 << 10;
             }
             else if(!strcmp(field, "http_request") || !strcmp(field, "content")) {
                 lquote = colon + 1;
@@ -358,11 +408,13 @@ int main(int argc, char **argv)
                     new_rule->http_request = (unsigned char*) malloc(sizeof(unsigned char) * (rquote - lquote) + 1);
                     strncpy(new_rule->http_request, lquote+1, rquote - lquote);
                     new_rule->http_request[rquote - lquote] = 0;
+                    new_rule->care += 1 << 11;
                 }
                 else {
                     new_rule->content = (unsigned char*) malloc(sizeof(unsigned char) * (rquote - lquote) + 1);
                     strncpy(new_rule->content, lquote+1, rquote - lquote);
                     new_rule->content[rquote - lquote] = 0;
+                    new_rule->care += 1 << 12;
                 }
             }
             else {
@@ -390,64 +442,63 @@ int main(int argc, char **argv)
         while((packet = pcap_next(handle, &header)) == NULL);
         rule_iterator = head.next_rule;
         is_attack = 0;
-        while(rule_iterator != NULL) {
-            if(rule_iterator->tos != *(uint8_t*)(ip+1)) {
+        ip = packet + ETHERNET_SIZE;
+        tcp = ip + 4*IP_HLENGTH(*(uint8_t*)(ip));
+        http = tcp + 4*(*(uint8_t*)(tcp+12));
+        while((rule_iterator = rule_iterator->next_rule) != NULL) {
+            if(rule_iterator->care & 0x1 && rule_iterator->tos != ntohs(*(uint8_t*)(ip+1))) {
                 continue;
             }
-            if(rule_iterator->length != *(uint16_t*)(ip+2)) {
+            if(rule_iterator->care & 0x2 && rule_iterator->length != ntohs(*(uint16_t*)(ip+2))) {
                 continue;
             }
-            if(rule_iterator->fragoffset != *(uint16_t*)(ip+4)) {
+            if(rule_iterator->care & 0x4 && rule_iterator->fragoffset != ntohs(*(uint16_t*)(ip+4))) {
                 continue;
             }
-            if(rule_iterator->ttl != *(uint8_t*)(ip+8)) {
+            if(rule_iterator->care & 0x8 && rule_iterator->ttl != *(uint8_t*)(ip+8)) {
                 continue;
             }
-            if(rule_iterator->protocol != *(uint8_t*)(ip+9)) {
+            if(rule_iterator->care & 0x100 && rule_iterator->seq != ntohl(*(uint32_t*)(tcp+4))) {
                 continue;
             }
-            if(rule_iterator->seq != *(uint32_t*)(tcp+4)) {
+            if(rule_iterator->care & 0x200 && rule_iterator->ack != ntohl(*(uint32_t*)(tcp+8))) {
                 continue;
             }
-            if(rule_iterator->ack != *(uint32_t*)(tcp+8)) {
+            if(rule_iterator->care & 0x400 && rule_iterator->flags != *(uint8_t*)(tcp+13)) {
                 continue;
             }
-            if(rule_iterator->flags != *(uint8_t*)(tcp+13)) {
+            if(rule_iterator->care & 0x10 && rule_iterator->srcip != ntohl(*(uint32_t*)(ip+12))) {
                 continue;
             }
-            if(rule_iterator->srcip != *(uint32_t*)(ip+12)) {
+            if(rule_iterator->care & 0x20 && rule_iterator->destip != ntohl(*(uint32_t*)(ip+16))) {
                 continue;
             }
-            if(rule_iterator->destip != *(uint32_t*)(ip+16)) {
+            if(rule_iterator->care & 0x40 && rule_iterator->srcport != ntohs(*(uint16_t*)tcp)) {
                 continue;
             }
-            if(rule_iterator->srcport != *(uint16_t*)tcp) {
+            if(rule_iterator->care & 0x80 && rule_iterator->destport != ntohs(*(uint16_t*)(tcp+2))) {
                 continue;
             }
-            if(rule_iterator->destport != *(uint16_t*)(tcp+2)) {
+            /*if(rule_iterator->care & 0x800 && strcmp(rule_iterator->http_request, header)) {
                 continue;
             }
-            if(strcmp(rule_iterator->http_request, header)) {
-                continue;
-            }
-            if(strcmp(rule_iterator->content, payload)) {
+            if(rule_iterator->care & 0x1000 && strcmp(rule_iterator->content, payload)) {
                 continue;   
-            }
+            }*/
             is_attack = 1;
             break;
         }
-        ip = packet+ETHERNET_SIZE;
         printf("IP header\n");
         printf("  Version: %d\n", IP_VERSION(*(uint8_t*)(ip)));
         printf("  Header Length: %d\n", IP_HLENGTH(*(uint8_t*)(ip)));
-        printf("  Type of Service: %d\n", *(uint8_t*)(ip+1));
-        printf("  Total Length: %d\n", *(uint16_t*)(ip+2));
-        printf("  Identification: %d\n", *(uint16_t*)(ip+4));
+        printf("  Type of Service: %d\n", ntohs(*(uint8_t*)(ip+1)));
+        printf("  Total Length: %d\n", ntohs(*(uint16_t*)(ip+2)));
+        printf("  Identification: %d\n", ntohs(*(uint16_t*)(ip+4)));
         printf("  Flags: %d\n",  IP_FLAGS(*(uint8_t*)(ip+6)));
-        printf("  Fragment Offset: %d\n", IP_FRAGOFFSET(*(uint16_t*)(ip+6)));
+        printf("  Fragment Offset: %d\n", IP_FRAGOFFSET(ntohs(*(uint16_t*)(ip+6))));
         printf("  TTL: %d\n", *(uint8_t*)(ip+8));
         printf("  Protocol: %d\n", *(uint8_t*)(ip+9));
-        printf("  Header Checksum: %d\n", *(uint16_t*)(ip+10));
+        printf("  Header Checksum: %d\n", ntohs(*(uint16_t*)(ip+10)));
         printf("  Source IP Address: %d.%d.%d.%d\n", *(uint8_t*)(ip+12), 
                 *(uint8_t*)(ip+13), 
                 *(uint8_t*)(ip+14), 
@@ -456,12 +507,11 @@ int main(int argc, char **argv)
                 *(uint8_t*)(ip+17), 
                 *(uint8_t*)(ip+18), 
                 *(uint8_t*)(ip+19));
-        tcp = ip + IP_HLENGTH(*(uint8_t*)(ip));
         printf("TCP header\n");
-        printf("  Source Port: %d\n", *(uint16_t*)tcp);
-        printf("  Destination Port: %d\n", *(uint16_t*)(tcp+2));
-        printf("  Sequence Number: %d\n", *(uint32_t*)(tcp+4));
-        printf("  Acknowledgment Number: %d\n", *(uint32_t*)(tcp+8));
+        printf("  Source Port: %d\n", ntohs(*(uint16_t*)tcp));
+        printf("  Destination Port: %d\n", ntohs(*(uint16_t*)(tcp+2)));
+        printf("  Sequence Number: %u\n", *(uint32_t*)(tcp+4));
+        printf("  Acknowledgment Number: %u\n", *(uint32_t*)(tcp+8));
         printf("  Data Offset: %d\n", *(uint8_t*)(tcp+12));
         tcp_flags = *(uint8_t*)(tcp + 13);
         printf("  Flags C: %d, E: %d, U: %d, A: %d, P: %d, R: %d, S: %d, F: %d\n", (tcp_flags & 0x80) >> 7, 
@@ -472,12 +522,37 @@ int main(int argc, char **argv)
                 (tcp_flags & 0x04) >> 2, 
                 (tcp_flags & 0x02) >> 1, 
                 tcp_flags & 0x01);
-        printf("  Window Size: %d\n", *(uint16_t*)(tcp+14));
-        printf("  Checksum: %d\n", *(uint16_t*)(tcp+16));
-        printf("  Urgent Pointer: %d\n\n\n", *(uint16_t*)(tcp+18));
-        http = tcp + *(uint8_t*)(tcp+12);
-        printf("  Payload: %s\n", http);
-        printf("  %s\n", is_attack ? "
+        printf("  Window Size: %d\n", ntohs(*(uint16_t*)(tcp+14)));
+        printf("  Checksum: %d\n", ntohs(*(uint16_t*)(tcp+16)));
+        printf("  Urgent Pointer: %d\n\n\n", ntohs(*(uint16_t*)(tcp+18)));
+        printf("  Payload:\n");
+	for(i=0; i<strlen(http); i++) {
+	    if(i % 16 == 0) {
+		printf("|");
+	    }
+	    printf("%02x ", http[i]);
+	    if(i % 16 == 15) {
+		printf("|     %c%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c\n", isprint(http[i-15])? http[i-15] : '.', 
+						   		   isprint(http[i-14])? http[i-14] : '.', 
+						   		   isprint(http[i-13])? http[i-13] : '.',
+						   		   isprint(http[i-12])? http[i-12] : '.',
+						   		   isprint(http[i-11])? http[i-11] : '.', 
+						   		   isprint(http[i-10])? http[i-10] : '.', 
+						   		   isprint(http[i-9])? http[i-9] : '.',
+						   		   isprint(http[i-8])? http[i-8] : '.',
+						   		   isprint(http[i-7])? http[i-7] : '.', 
+						   		   isprint(http[i-6])? http[i-6] : '.', 
+						   		   isprint(http[i-5])? http[i-5] : '.',
+						   		   isprint(http[i-4])? http[i-4] : '.',
+						   		   isprint(http[i-3])? http[i-3] : '.', 
+						   		   isprint(http[i-2])? http[i-2] : '.', 
+						   		   isprint(http[i-1])? http[i-1] : '.',
+						   		   isprint(http[i-0])? http[i-0] : '.');
+
+
+	    }
+	}
+	printf("\n\n\n");
     }
     pcap_close(handle);
     return 0;
