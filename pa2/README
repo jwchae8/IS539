@@ -1,1 +1,83 @@
-This is README for assignment2
+=====================================================
+           README for Programming Assignment2
+            Author : Jongwook Chae(20153623)
+                     jwchae8@gmail.com
+=====================================================
+
+This is a simple DDoS Detector written in C under
+assistance of pcap library. It measures PPS(Packets Per
+Second), BPS(Bytes Per Second), TCP failed connection ratio
+to determine whether certain traffic is DDoS traffic or not.
+This application can run on Ubuntu 14.04 32-bit system. 
+Compatibility to other version of Linux kernel and 
+Ubuntu is not guaranteed.
+
+This application captures packets from primary NIC(network
+interface card) for doing detector service. Traffic
+statistics will be printed out on the screen every 1 second.
+Of course, in order to capture packets, this process requires
+sudo privilege! You should be aware of it.
+
+This application will show unexpected behavior when poor arguments
+(like not number) are given.
+
+I count TCP successful connection for only TCP succesful 3-way
+handshake. When handshake not done in timeout(30seconds) or other flags
+come out between SYN - SYNACK - ACK sequence, or wrong sequence number or
+SYN flood, all of them are counted as failed. If same seq # SYN comes, it
+is considered as retransmission and counted as one failure
+
+=====================================================
+                 
+                  Installation
+
+=====================================================
+
+This part shows prerequisites for using this application.
+I did not use any specialized libraries, but uses pcap
+library for capturing packets. So in order to compile my
+code, it is required to install libpcap-dev, first
+(Not libpcap, but libpcap-dev). If you are trying to
+use this application from the scratch, basic components like
+build-essential, libtool, automake, autoconf are required.
+(Some of them may not be necessary) In this directory,
+there is an installation script as described above. Run the
+installation script first, and then change directory into
+the src directory. You should execute make command to create
+an executable!
+
+
+=====================================================
+
+              Running the Application
+
+=====================================================
+
+It is very easy to run this program.
+
+Execution command is like below.
+ 
+   sudo ./dd [-pps packets_per_second] [-bps bytes_per_second] [-tcp tcp_fail_ratio]
+
+One of three options must be given to detect DDoS.
+Also sudo privilege is required as mentioned earlier.
+
+
+=====================================================
+
+                  Code Repository
+
+=====================================================
+
+My code is public, so it is available on online.
+Here is a link to my Github repository.
+
+        https://github.com/jwchae8/IS539
+
+
+
+
+
+------------------------------------------------------
+           
+            Copyright (c) Jongwook Chae

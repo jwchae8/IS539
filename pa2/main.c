@@ -45,6 +45,9 @@ struct flow_info {
     int tot_tcp_f;
     int start_time;
     int syn_time;
+    int connection_done;
+    uint32_t seq;
+    uint32_t ack;
     struct flow_info *next_flow;
     struct flow_history *history;
 };
@@ -128,7 +131,7 @@ void print_statistics(int signum) {
             order++;
         }
         printf("Real Time\n");
-	if((flow_iterator->flag == 0x02 || flow_iterator->flag == 0x12) && seconds - flow_iterator->syn_time >= 30) {
+	if(flow_iterator->connection_done && seconds - flow_iterator->syn_time >= 30) {
 	    flow_iterator->flag = 0;
 	    flow_iterator->tcp_f += 1;
 	}
@@ -318,12 +321,15 @@ int main(int argc, char **argv) {
 		new_flow->dstip = dstip;
 		new_flow->srcport = srcport;
 		new_flow->dstport = dstport;
+		new_flow->connection_done = 1;
                 new_flow->history = NULL;
                 new_flow->next_flow = NULL;
 		if(*(uint8_t*)(ip+9) == 6)  {
 		    new_flow->flag = *(uint8_t*)(tcphdr+13);
+		    printf("qwerqwerqwer %d\n", new_flow->flag);
 		    if(new_flow->flag == 0x02){
 		        new_flow->syn_time = seconds;
+			new_flow->seq = ntohl(*(uint32_t*)(tcphdr+4));
 		    }
 		    else {
 			new_flow->flag = 0;
@@ -346,30 +352,41 @@ int main(int argc, char **argv) {
                 same->bi_bytes += ntohs(*(uint16_t*)(ip+2)) + 14;
                 same->pkts += 1;
                 same->bi_pkts += 1;
-		if(*(uint8_t*)(ip+9) == 6) {
+		if(*(uint8_t*)(ip+9) == 6 && same->connection_done) {
 		    tmp_flag = *(uint8_t*)(tcphdr+13);
-		    if(opposite->flag == 0x02 && tmp_flag == 0x12) {
+		    printf("asdfasdfasdfasdf %d %d\n", opposite->flag, tmp_flag);
+		    if(opposite->flag == 0x02 || opposite->flag & 0x12)printf("seq+1: %u ack: %u\n", opposite->seq+1, ntohl(*(uint32_t*)(tcphdr+8)));
+		    if(opposite->flag == 0x02 && (tmp_flag & 0x12)){// && opposite->seq+1 == ntohl(*(uint32_t*)(tcphdr+8))) {
 			same->flag = tmp_flag;
+			same->ack = ntohl(*(uint32_t*)(tcphdr+8));
+			same->seq = ntohl(*(uint32_t*)(tcphdr+4));
 		    }
-		    else if(opposite->flag == 0x12 && tmp_flag == 0x10) {
+		    else if((opposite->flag & 0x12) && (tmp_flag & 0x10)){// && opposite->seq+1 == ntohl(*(uint32_t*)(tcphdr+8))) {
 			same->flag = tmp_flag;
 			opposite->flag = tmp_flag;
 			same->tcp_s += 1;
 			opposite->tcp_s += 1;
+			same->connection_done = 0;
+			opposite->connection_done = 0;
 		    }
-		    else if(opposite->flag == 0x10 && tmp_flag == 0x01) {
+		    else if((opposite->flag & 0x10) && tmp_flag == 0x01) {
 			same->flag = tmp_flag;
 		    }
 		    else if(same->flag == 0x01 && tmp_flag == 0x10) {
 			same->flag = 0x11;
 		    }
-		    else if((same->flag == 0x11 || same->flag == 0) && tmp_flag == 0x02) {
+		    else if(tmp_flag == 0x02) {
 			same->flag = 0x02;
-			same->syn_time = seconds;
+			if(same->seq != ntohl(*(uint32_t*)(tcphdr+4))) {
+			    same->syn_time = seconds;
+			    same->tcp_f += 1;
+			    opposite->tcp_f += 1;
+			}
 		    }
 		    else {
 			same->flag = 0;
 			same->tcp_f += 1;
+			opposite->tcp_f += 1;
 		    }
 		}
             }
@@ -385,6 +402,7 @@ int main(int argc, char **argv) {
 		new_flow->dstip = srcip;
 		new_flow->srcport = dstport;
 		new_flow->dstport = srcport;
+		new_flow->connection_done = 1;
                 new_flow->history = NULL;
                 new_flow->next_flow = NULL;
 		if(*(uint8_t*)(ip+9) == 6)  {
