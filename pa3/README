@@ -1,1 +1,105 @@
-This is README for assignment3
+=====================================================
+           README for Programming Assignment3
+            Author : Jongwook Chae(20153623)
+                     jwchae8@gmail.com
+=====================================================
+
+This is a botnet written in C
+It is consist of three levels of hierarchy.
+The top level is bot-master.
+It receives command from attacker and broadcast it around super bots.
+Super bots then forward commands to child bots.
+They also manage the status of child bots.
+Child bots are doing attacks(sending packets) or creating files
+It consists of single binary
+
+                 ------------
+                 |Bot master|
+                 ------------
+                      |
+                      |
+         _________________________________________
+         |             |             |            |
+     SuperBot       SuperBot     SuperBot     SuperBot
+         |             |             |            |
+     ChildBot       ChildBot      ChildBot     ChildBot
+     ChildBot       ChildBot      ChildBot     ChildBot
+     ChildBot       ChildBot      ChildBot     ChildBot
+      ....           ....           ....        ....
+
+
+
+=====================================================
+                 
+                  Installation
+
+=====================================================
+
+This part shows prerequisites for using this application.
+I did not use any specialized libraries. If you are trying to
+use this application from the scratch, basic components like
+build-essential, libtool, automake, autoconf are required.
+(Some of them may not be necessary) In this directory,
+there is an installation script as described above. Run the
+installation script first, and then change directory into
+the src directory. You should execute make command to create
+an executable!
+
+
+=====================================================
+
+              Running the Application
+
+=====================================================
+
+It is very easy to run this program.
+
+Execution command is like below.
+ 
+   sudo ./botnet
+
+Then it offers cli interface to the user.
+
+There are six commands available in cli interface.
+
+show 
+    : shows every instance of child bots
+
+search [child_bot_id]...
+    : shows status of certain child bots
+
+read [-date|-host] [child_bot_id]...
+    : shows system date or host name of certain child bots
+
+create [filename] [child_bot_id]...
+    : creates a file with name filename_id
+
+send [pkts num] [host:ip] [child_bot_id]...
+    : sends UDP packets to target machine with several child bots
+
+quit
+    : quit the application
+
+If you quit the application(or ctrl-c), TCP connection between bots
+are remained so if you want to reboot bot master then please patiently
+wait for a half of minute(timeout of TCP).
+
+
+=====================================================
+
+                  Code Repository
+
+=====================================================
+
+My code is public, so it is available on online.
+Here is a link to my Github repository.
+
+        https://github.com/jwchae8/IS539
+
+
+
+
+
+------------------------------------------------------
+           
+            Copyright (c) Jongwook Chae
