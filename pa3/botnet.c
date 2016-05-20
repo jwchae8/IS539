@@ -81,7 +81,26 @@ void super_bot(int id) {
     }
     sprintf(msg, "%d %d", id, alive);
     write(master_fd, msg, 255);
-    while(1);
+    while(1) {
+        read(master_fd, msg, 255);
+        if(!strncmp(msg, "show", 4)) {
+            for(i=0; i<8; i++) {
+                write(child_fd[i], "show", 255);
+                read(child_fd[i], msg, 255);
+            }
+        }
+        else if(!strncmp(msg, "search", 6)) {
+        }
+        else if(!strncmp(msg, "read", 4)) {
+        }
+        else if(!strncmp(msg, "create", 6)) {
+        }
+        else if(!strncmp(msg, "send", 4)) {
+        }
+        else {
+            write(master_fd, "I don't know", 255);
+        }
+    }
 }
 
 void usage() {
@@ -94,8 +113,10 @@ void usage() {
 }
 
 int main() {
-    int i;
-    char cmd[20], msg[256];
+    int i, err;
+    char cmd[100], msg[256];
+    char *param, *filename, *ipport;
+    int nparam;
     int listen_fd, connect_fd[4], connect_len;
     struct sockaddr_in master, super;    
     int super_id, child_num;
@@ -142,19 +163,75 @@ int main() {
     printf("a botnet is successfully constructed!\n");
     while(1) {
         printf("botnet > ");
-        scanf("%s", cmd);
-        if(!strcmp(cmd, "show")) {
+        if(fgets(cmd, 100, stdin) == NULL) {
+            continue;
+        }
+        param = strtok(cmd, " ");
+        if(!strncmp(param, "show", 4)) {
             for(i=0; i<4; i++) {
                 write(connect_fd[i], "show", 255);
             }
         }
-        else if(!strcmp(cmd, "search")) {
-        }
-        else if(!strcmp(cmd, "read")) {
-            scanf("%s", cmd);
-            if(!strcmp(cmd, "-date")) {
+        else if(!strncmp(param, "search", 6)) {
+            err = 1;
+            while((param = strtok(NULL, " ")) != NULL) {
+                err = 0;
+                nparam = atoi(param);
+                if(nparam < 1 || nparam > 32) {
+                    err = 1;
+                    break;
+                }
+                msg = "search ";
+                strcat(msg, param);
+                write(connect_fd[nparam/8], msg, 255);
+                read(connect_fd[nparam/8], msg, 255);
+                printf("[%d:%d] alive\n", 1001+nparam/8, nparam);
             }
-            else if(!strcmp(cmd, "-host")) {
+            if(err) {
+                printf("No argument given OR Wrong argument given\n");
+                continue;
+            }
+        }
+        else if(!strncmp(param, "read", 4)) {
+            param = strtok(NULL, " ");
+            if(!strcmp(param, "-date")) {
+                err = 1;
+                while((param = strtok(NULL, " ")) != NULL) {
+                    err = 0;
+                    nparam = atoi(param);
+                    if(nparam < 1 || nparam > 32) {
+                        err = 1;
+                        break;
+                    }
+                    msg = "date ";
+                    strcat(msg, param);
+                    write(connect_fd[nparam/8], msg, 255);
+                    read(connect_fd[nparam/8], msg, 255);
+                    printf("[%d] %s\n", nparam, msg);
+                }
+                if(err) {
+                    printf("No argument given OR Wrong argument given\n");
+                }
+            }
+            else if(!strcmp(param, "-host")) {
+                err = 1;
+                while((param = strtok(NULL, " ")) != NULL) {
+                    err = 0;
+                    nparam = atoi(param);
+                    if(nparam < 1 || nparam > 32) {
+                        err = 1;
+                        break;
+                    }
+                    msg = "date ";
+                    strcat(msg, param);
+                    write(connect_fd[nparam/8], msg, 255);
+                    read(connect_fd[nparam/8], msg, 255);
+                    printf("[%d] %s\n", nparam, msg);
+                }
+                if(err) {
+                    printf("No argument given OR Wrong argument given\n");
+                }
+
             }
             else {
                 printf("Wrong argument given\n");
@@ -162,12 +239,48 @@ int main() {
                 continue;
             }
         }
-        else if(!strcmp(cmd, "create")) {
-            for(i=0; i<4; i++) {
+        else if(!strncmp(param, "create", 6)) {
+            filename = strtok(NULL, " ");
+            err = 1;
+            while((param = strtok(NULL, " ")) != NULL) {
+                err = 0;
+                nparam = atoi(param);
+                if(nparam < 1 || nparam > 32) {
+                    err = 1;
+                    break;
+                }
+                msg = "create ";
+                strcat(msg, param);
+                strcat(msg, " ");
+                strcat(msg, filename);
+                write(connect_fd[nparam/8], msg, 255);
+                read(connect_fd[nparam/8], msg, 255);
+                printf("[%d] %s_%d is created\n", nparam, filename, nparam);
+            }
+            if(err) {
+                printf("No argument given OR Wrong argument given\n");
             }
         }
-        else if(!strcmp(cmd, "send")) {
-            for(i=0; i<4; i++) {
+        else if(!strncmp(param, "send", 4)) {
+            ipport = strtok(NULL, " ");
+            err = 1;
+            while((param = strtok(NULL, " ")) != NULL) {
+                err = 0;
+                nparam = atoi(param);
+                if(nparam < 1 || nparam > 32) {
+                    err = 1;
+                    break;
+                }
+                msg = "send ";
+                strcat(msg, param);
+                strcat(msg, " ");
+                strcat(msg, ipport);
+                write(connect_fd[nparam/8], msg, 255);
+                read(connect_fd[nparam/8], msg, 255);
+                printf("[%d] %s_%d is created\n", nparam, filename, nparam);
+            }
+            if(err) {
+                printf("No argument given OR Wrong argument given\n");
             }
         }
         else {
