@@ -248,6 +248,7 @@ int main(int argc, char **argv)
         exit(-1);
     }
     pattern_rule_exists = 1;
+    head.next_rule = NULL;
     /* Rule parsing */
     while((fscanf(fp, "%s", rule_token)) != EOF) {
         error = 0;
